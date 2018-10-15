@@ -1,0 +1,203 @@
+
+initialize() {
+      defineConstant("M", 50);    //radius of mate choice/migration circle
+      defineConstant("D", 1.0);    //fitness of drive
+      defineConstant("W", 100);    //width of corridor
+// */
+
+      defineConstant("R", 20);   //radius of interaction circle
+      defineConstant("P", 10053 + 4*W);   // initial population
+
+        initializeSLiMOptions(dimensionality="xy");
+        initializeMutationRate( 0.0 );  //mutation rate
+        initializeMutationType("m1", 0.5, "f", 0.0);
+        initializeMutationType("m2", 0.5, "f", 0.0); //name, dominance coefficient,             fixed fitness effect, fixed fitness effect level
+        m2.convertToSubstitution = F;
+        initializeMutationType("m3", 0.5, "f", 0.0); //neutral mutation type
+        initializeGenomicElementType("g1", m1, 1.0); //for element                 g1, all mutations (with proportion 1.0)
+        initializeGenomicElement(g1, 0, 2); //make genome size
+        initializeRecombinationRate(0.0); //homologous recombination
+        // spatial competition
+            initializeInteractionType(1, "xy", reciprocal=T, maxDistance= R);
+            i1.setInteractionFunction("f", 1.0);
+             // spatial mate choice
+            initializeInteractionType(2, "xy", reciprocal=T, maxDistance= M);
+            i2.setInteractionFunction("f", 1.0);
+}
+
+function (f)TwoHabitatMap(i$ width, i$ height, i$ radius, i$ corridor)
+{
+    // a little error-checking
+    if ((width <= 0) | (height <= 0) | (radius <= 0) | (corridor <= 0))
+        stop("all dimensions must be > 0");
+    if ((width < height) | (radius * 2 > height) | (radius * 4 > width))
+        stop("dimensions do not lay out properly");
+
+    // find habitat circle centers
+    margin = (height - radius * 2) / 2;
+    cx1 = margin + radius;
+    cx2 = width - (margin + radius);
+    cy = margin + radius;
+
+    // draw the habitat circles at (cx1, cy) and (cx2, cy)
+    // we do this with some simple matrix-based logic
+    xv1 = (seqLen(width) + 0.5 - cx1) ^ 2;
+    xd1 = matrix(rep(xv1, height), height, width, byrow=T);
+
+    xv2 = (seqLen(width) + 0.5 - cx2) ^ 2;
+
+    xd2 = matrix(rep(xv2, height), height, width, byrow=T);
+
+    yv = (seqLen(height) + 0.5 - cy) ^ 2;
+    yd = matrix(rep(yv, width), height, width, byrow=F);
+
+    d1 = xd1 + yd;
+    d2 = xd2 + yd;
+    insideCircles = ((d1 <= radius ^ 2) | (d2 <= radius ^ 2));
+
+    // draw the habitat corridor, with a similar technique
+    xvc = (seqLen(width) + 0.5);
+    xvc = (xvc >= cx1) & (xvc <= cx2);
+    xcorridor = matrix(rep(xvc, height), height, width, byrow=T);
+
+    yvc = (seqLen(height) + 0.5);
+    yvc = abs(yvc - (height / 2)) < corridor;
+    ycorridor = matrix(rep(yvc, width), height, width, byrow=F);
+
+    insideCorridor = xcorridor & ycorridor;
+
+    // the final map is a merge of the circles and the corridor
+    return t(asFloat(insideCircles | insideCorridor));
+}
+
+1 late() {
+    sim.addSubpop("p1", P);
+
+    width = 2000;
+    height = 800;
+    radius = 400;
+    corridor = W;
+
+    p1.setSpatialBounds(c(0.0, 0.0, width, height));
+    mapValues = TwoHabitatMap(width, height, radius, corridor);
+
+    p1.defineSpatialMap("world", "xy", NULL, mapValues,
+        valueRange=c(0.0, 1.0), colors=c("#0000CC", "#55FF22"));
+
+    i = p1.individuals;
+       for (ind in i)
+             ind.setSpatialPosition(p1.pointUniform());
+             distance = i.x;
+             left = i[distance < 1000];
+             left.genomes.addNewDrawnMutation(m2, 2);
+
+}
+
+1: late() {
+    i1.evaluate();
+    i2.evaluate();
+}
+
+fitness(NULL) {
+   totalStrength = i1.totalOfNeighborStrengths(individual);
+   return 10 / (9*(totalStrength/(P * PI * R^2/(2*PI*400^2+W*400))) + 1);
+}
+
+ fitness(m2) {
+      count = sum(c(genome1, genome2).countOfMutationsOfType(m2)); //method counts the mutations of type m2 in both genomes, returns a vector; l
+
+     if ((count == 2) & homozygous)
+       return D;
+     else if (count == 1) //looks for heterozygosity
+       return sqrt(D);
+     else
+         return 1.0; //wildtype homozygous
+  }
+
+
+1: mateChoice() {
+    return weights*i2.strength(individual);
+}
+modifyChild() {
+    do { r = rexp(1, M);
+      theta = runif(1, 0, 2*PI);
+       pos = parent1.spatialPosition + c(r*sin(theta),r*cos(theta));
+}
+    while (!p1.pointInBounds(pos));
+
+    // prevent dispersal into water
+    if (p1.spatialMapValue("world", pos) == 0.0)
+        return F;
+
+    child.setSpatialPosition(pos);
+    return T;
+}
+
+
+1: late() {
+    // Color carriers of the gene drive so we can see them
+    for (ind in p1.individuals)
+        if (ind.countOfMutationsOfType(m2) > 0)
+            ind.color = "cornflowerblue";
+  }
+
+2: {
+  p1.setSubpopulationSize(asInteger(round(sum(p1.cachedFitness(NULL)))));
+  }
+
+1 {
+    cat("Output key: A-freq, A-freq left, A-freq right, count, gen-number\n");
+}
+
+1:100 late() {
+    all = sim.subpopulations.individuals;
+
+    driveA = sim.mutationsOfType(m2);
+
+    driveA_left = 0;
+    total_left = 0;
+    driveA_right = 0;
+    total_right = 0;
+
+    driveA_freq = 0;
+    if (driveA.size()) {
+        driveA_freq = sim.mutationFrequencies(p1, driveA);
+        for (ind in all) {
+            if (ind.x < 1000) {
+                driveA_left = driveA_left + ind.countOfMutationsOfType(m2);
+                total_left = total_left + 2;
+            }
+            else {
+                driveA_right = driveA_right + ind.countOfMutationsOfType(m2);
+                total_right = total_right + 2;
+            }
+        }
+    }
+
+    left_rate = 0.0;
+    if (total_left)
+        left_rate = driveA_left / total_left;
+
+    right_rate = 0.0;
+    if (total_right)
+        right_rate = driveA_right / total_right;
+
+
+    cat("#OUTPUT: " + driveA_freq + " " + left_rate + " " + right_rate + " ");
+    cat(" " + p1.individualCount + " " + sim.generation + "\n");
+
+    cat("PYTHON:: " + driveA_freq + " " + left_rate + " " + right_rate + "\n");
+}
+
+//// END SLIM RUN IF DRIVE DROPS TO ZERO.
+11: late() { // Replace 11 with the generation after drive is dropped.
+    driveA = sim.mutationsOfType(m2); // If something other than m2 is of interest, change this.
+    slim_runs_until_generation = 100; // Change this to the generation when slim run would normally end at.
+    // E.g. the generation that the previous callback runs until.
+    if (!driveA.size()) {
+        for (i in seqLen(slim_runs_until_generation - sim.generation))
+            cat("PYTHON:: 0 0 0\n"); // Basically dummy output, so that averages can be done correctly in python.
+            // Change the above line if more than one thing is being tracked by python.
+        sim.simulationFinished();
+    }
+}

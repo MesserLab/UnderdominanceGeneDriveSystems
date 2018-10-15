@@ -1,0 +1,157 @@
+
+initialize() {
+    defineConstant("M", 0.05); //m is the radius of mate choice/migration circle
+    defineConstant("D", 1.0); //d is the fitness
+    // */
+    defineConstant("P", 10000);   // initial population
+    defineConstant("I", 8451);   // gene drive introduction size
+    defineConstant("C", 0.25);   // radius of the uniform gene drive drop
+    defineConstant("R", 0.02); //r is the radius of interaction circle
+
+    initializeSLiMOptions(dimensionality="xy", periodicity="xy");
+    initializeMutationRate( 0.0 );  //mutation rate
+    initializeMutationType("m1", 0.5, "f", 0.0); // neutral
+    initializeMutationType("m2", 0.5, "f", 0.0); // drive, dominance coefficient, fixed fitness effect, fixed fitness effect level
+    initializeMutationType("m3", 0.5, "f", 0.0); //neutral mutation type
+    m2.convertToSubstitution = F;
+    initializeGenomicElementType("g1", c(m1, m2, m3), c(1.0, 1.0, 1.0));
+    initializeGenomicElement(g1, 0, 2); //genome size
+    initializeRecombinationRate(0.5); //homologous recombination
+    //SPATIAL MODEL
+    // spatial competition
+    initializeInteractionType(1, "xy", reciprocal=T, maxDistance= R);
+    i1.setInteractionFunction("f", 1.0);
+
+    // spatial mate choice
+    initializeInteractionType(2, "xy", reciprocal=T, maxDistance= M);
+    i2.setInteractionFunction("f", 1.0);
+}
+
+1 late() {
+    sim.addSubpop("p1", P);
+    for (ind in p1.individuals)
+        ind.setSpatialPosition(p1.pointUniform());
+}
+
+1: late() { //evaluate interactions before fitness callbacks
+    i1.evaluate();
+    i2.evaluate();
+}
+
+fitness(NULL) {
+    totalStrength = i1.totalOfNeighborStrengths(individual);
+    return 10 / (9*(totalStrength/(P * PI * R^2)) + 1);
+}
+
+2: {
+    p1.setSubpopulationSize(asInteger(round(sum(p1.cachedFitness(NULL))))); //population size at the end of every generation is equal to the sum of the individual fitness of each member
+}
+
+fitness(m2) {
+    count = sum(c(genome1, genome2).countOfMutationsOfType(m2));
+    if ((count == 2) & homozygous)
+        return D;
+    else if (count == 1) // Heterozygosity
+        return sqrt(D);
+    else
+        return 1.0; // Wildtype homozygous
+}
+
+1: mateChoice() {
+    return weights * i2.strength(individual);
+}
+
+modifyChild() {
+    r = rexp(1, M);
+    theta = runif(1, 0, 2*PI);
+    pos = parent1.spatialPosition + c(r*sin(theta),r*cos(theta));
+    child.setSpatialPosition(p1.pointPeriodic(pos));
+    return T;
+}
+
+10 {
+    p1.setSubpopulationSize(p1.individualCount + I);
+}
+
+10 late() {
+    drop = sample(p1.individuals, I);
+    drop.genomes.addNewDrawnMutation(m2, 2);
+
+    for (ind in drop) {
+        r = runif(1, 0, C);
+        theta = runif(1, 0, 2*PI);
+        x = r * cos(theta);
+        y = r * sin(theta);
+        ind.setSpatialPosition(c(x + 0.5, y + 0.5));
+    }
+    i1.unevaluate();
+    i2.unevaluate();
+    i1.evaluate();
+    i2.evaluate();
+}
+
+10: late() {
+    // Color carriers of the gene drive so we can see them
+    for (ind in p1.individuals)
+        if (ind.countOfMutationsOfType(m2) > 0)
+            ind.color = "cornflowerblue";
+}
+
+1 {
+    cat("Output key: A-freq, A-freq in radius, A-freq outside, count, gen-number\n");
+}
+
+1:40 late() {
+    all = sim.subpopulations.individuals;
+
+    driveA = sim.mutationsOfType(m2);
+
+    driveA_freq = 0;
+    driveA_in_circle_freq = 0;
+    driveA_outside_circle_freq = 0;
+
+    inside_drive = 0;
+    inside_total = 0;
+    outside_drive = 0;
+    outside_total = 0;
+
+    if (driveA.size()) {
+        driveA_freq = sim.mutationFrequencies(p1, driveA);
+        for (ind in all) {
+            distance_to_center = sqrt((ind.x - 0.5)^2 + (ind.y - 0.5)^2);
+            if (distance_to_center < C) {
+                inside_drive = inside_drive + ind.countOfMutationsOfType(m2);
+                inside_total = inside_total + 2;
+            }
+            else {
+                outside_drive = outside_drive + ind.countOfMutationsOfType(m2);
+                outside_total = outside_total + 2;
+            }
+        }
+    }
+    inside_rate = 0.0;
+    if (inside_total)
+        inside_rate = inside_drive / inside_total;
+
+    outside_rate = 0.0;
+    if (outside_total)
+        outside_rate = outside_drive / outside_total;
+
+    cat("#OUTPUT: " + driveA_freq + " " + inside_rate + " " + outside_rate + " ");
+    cat(" " + p1.individualCount + " " + sim.generation + "\n");
+
+    cat("PYTHON:: " + driveA_freq + " " + inside_rate + " " + outside_rate + "\n");
+}
+
+//// END SLIM RUN IF DRIVE DROPS TO ZERO.
+12: late() { // Replace 12 with the generation after drive is dropped.
+    driveA = sim.mutationsOfType(m2); // If something other than m2 is of interest, change this.
+    slim_runs_until_generation = 40; // Change this to the generation when slim run would normally end at.
+    // E.g. the generation that the previous callback runs until.
+    if (!driveA.size()) {
+        for (i in seqLen(slim_runs_until_generation - sim.generation))
+            cat("PYTHON:: 0 0 0\n"); // Basically dummy output, so that averages can be done correctly in python.
+            // Change the above line if more than one thing is being tracked by python.
+        sim.simulationFinished();
+    }
+}

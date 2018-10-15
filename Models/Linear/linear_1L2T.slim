@@ -1,0 +1,161 @@
+initialize() {
+    defineConstant("M", 0.05); //m is the radius of mate choice/migration circle
+    defineConstant("D", 1.0);    //fitness of drive
+    // */
+
+    defineConstant("P", 10000);   // initial population
+    defineConstant("R", 0.02); //r is the radius of interaction circle
+
+    initializeSLiMOptions(dimensionality="xy");
+    initializeMutationRate( 0.0 );  //mutation rate
+    initializeMutationType("m1", 0.5, "f", 0.0); // neutral
+    initializeMutationType("m2", 0.5, "f", 0.0); // mutation A
+    m2.convertToSubstitution = F;
+    initializeMutationType("m3", 0.5, "f", 0.0); // mutation B
+    m3.convertToSubstitution = F;
+    initializeGenomicElementType("g1", m1, 1.0); //element g1, all mutations (with proportion 1.0)
+    initializeGenomicElement(g1, 0, 2); //genome size
+    initializeRecombinationRate(0.0); //homologous recombination
+    initializeInteractionType(1, "xy", reciprocal=T, maxDistance = R);
+    // spatial competition
+    i1.setInteractionFunction("f", 1.0);
+    // spatial mate choice
+    initializeInteractionType(2, "xy", reciprocal=T, maxDistance = M);
+    i2.setInteractionFunction("f", 1.0);
+}
+
+
+1 late() {
+   sim.addSubpop("p1", P);
+   i = p1.individuals;
+   for (ind in i)
+     ind.setSpatialPosition(p1.pointUniform());
+     distance = i.x;
+     left = i[distance < 0.5];
+
+     cseq = seqAlong(left);
+    cgenomes1 = left.genomes[cseq * 2];
+    cgenomes2 = left.genomes[cseq * 2 + 1];
+    cgenomes1.addNewDrawnMutation(m2, 2);
+    cgenomes2.addNewDrawnMutation(m3, 2);
+
+}
+
+1: late() { //evaluate interactions before fitness callbacks
+    i1.evaluate();
+    i2.evaluate();
+}
+
+fitness(NULL)
+{
+    totalStrength = i1.totalOfNeighborStrengths(individual);
+    return 10 / (9*(totalStrength/(P * PI * R^2)) + 1);
+}
+
+fitness(NULL) {
+        Acount = individual.countOfMutationsOfType(m2);
+        Bcount = individual.countOfMutationsOfType(m3);
+
+        if ((Acount == 1) & (Bcount == 1))            // heterozygous AB
+            return D;
+        else if ((Acount == 0) & (Bcount == 0))    // homozygous wildtype **
+            return 1.0;
+        else                                                    // *A, *B
+            return 0.0;
+}
+
+1: mateChoice() {
+    return weights*i2.strength(individual); // This call asks i2 to evaluate the strength of interaction between the first parent (individual) and all other individuals in its subpopulation. The result is returned as a vector
+}
+
+modifyChild() {
+    do {
+      r = rexp(1, M);
+      theta = runif(1, 0, 2*PI);
+       pos = parent1.spatialPosition + c(r*sin(theta),r*cos(theta));
+    } while (!p1.pointInBounds(pos));
+    child.setSpatialPosition(pos);
+
+   childGenomes = c(childGenome1, childGenome2);
+    mutACount = sum(childGenomes.countOfMutationsOfType(m2));
+    mutBCount = sum(childGenomes.countOfMutationsOfType(m3));
+
+        if ((mutACount == 1) & (mutBCount == 1))
+         return T;
+       else if ((mutACount == 0) & (mutBCount == 0))
+            return T;
+        else
+            return F;
+
+}
+
+2: {
+inds = p1.individuals;
+inds_with_m2 = (inds.countOfMutationsOfType(m2) == 1);    // logical vector
+inds_with_m3 = (inds.countOfMutationsOfType(m3) == 1);    // logical vector
+inds_no_m2 = (inds.countOfMutationsOfType(m2) == 0);
+inds_no_m3 = (inds.countOfMutationsOfType(m3) == 0);
+inds_gd = (inds_with_m2 & inds_with_m3);    // logical vector
+inds_wt = (inds_no_m2 & inds_no_m3);
+ind_wt_indices = which(inds_wt);    // integer vector of indices
+ind_gd_indices = which(inds_gd);
+
+fitness_values_gd = asInteger(round(sum(p1.cachedFitness(ind_gd_indices))/2));
+fitness_values_wt = asInteger(round(sum(p1.cachedFitness(ind_wt_indices))));
+fitness_val = fitness_values_gd + fitness_values_wt;
+
+p1.setSubpopulationSize(fitness_val);
+
+}
+
+
+1: late() {
+    // Color carriers of the gene drive so we can see them
+    for (ind in p1.individuals)
+        if (ind.countOfMutationsOfType(m2) > 0 & ind.countOfMutationsOfType(m3) > 0)
+            ind.color = "cornflowerblue";
+}
+
+1 {
+    cat("Output key: A-freq, A-freq left, A-freq right, count, gen-number\n");
+}
+
+1:60 late() {
+    all = sim.subpopulations.individuals;
+
+    driveA = sim.mutationsOfType(m2);
+
+    driveA_left = 0;
+    total_left = 0;
+    driveA_right = 0;
+    total_right = 0;
+
+    driveA_freq = 0;
+    if (driveA.size()) {
+        driveA_freq = sim.mutationFrequencies(p1, driveA);
+        for (ind in all) {
+            if (ind.x < 0.5) {
+                driveA_left = driveA_left + ind.countOfMutationsOfType(m2);
+                total_left = total_left + 2;
+            }
+            else {
+                driveA_right = driveA_right + ind.countOfMutationsOfType(m2);
+                total_right = total_right + 2;
+            }
+        }
+    }
+
+    left_rate = 0.0;
+    if (total_left)
+        left_rate = driveA_left / total_left;
+
+    right_rate = 0.0;
+    if (total_right)
+        right_rate = driveA_right / total_right;
+
+
+    cat("#OUTPUT: " + driveA_freq + " " + left_rate + " " + right_rate + " ");
+    cat(" " + p1.individualCount + " " + sim.generation + "\n");
+
+    cat("PYTHON:: " + 2 * driveA_freq + " " + 2 * left_rate + " " + 2 * right_rate + "\n");
+}

@@ -1,0 +1,192 @@
+
+initialize() {
+    defineConstant("M", 0.05); //m is the radius of mate choice/migration circle
+    defineConstant("D", 1.0); //d is the fitness
+    // */
+
+    defineConstant("P", 10000);   // initial population
+    defineConstant("I", 8451);   // gene drive introduction size
+    defineConstant("C", 0.25); //radius of uniform gene drive drop
+    defineConstant("R", 0.02); //r is the radius of interaction circle
+
+    initializeSLiMOptions(dimensionality="xy", periodicity="xy");
+    initializeMutationRate( 0.0 );  //mutation rate
+    initializeMutationType("m1", 0.5, "f", 0.0); // neutral
+    initializeMutationType("m2", 0.5, "f", 0.0); // mutation A
+    m2.convertToSubstitution = F;
+    initializeMutationType("m3", 0.5, "f", 0.0); // mutation B
+    m3.convertToSubstitution = F;
+    initializeGenomicElementType("g1", m1, 1.0); //element g1, all mutations (with proportion 1.0)
+    initializeGenomicElement(g1, 0, 2); //genome size
+    initializeRecombinationRate(0.5); //homologous recombination
+    // spatial competition
+    initializeInteractionType(1, "xy", reciprocal=T, maxDistance = R);
+    i1.setInteractionFunction("f", 1.0);
+    // spatial mate choice
+    initializeInteractionType(2, "xy", reciprocal=T, maxDistance = M);
+    i2.setInteractionFunction("f", 1.0);
+}
+
+
+1 late() {
+    sim.addSubpop("p1", P);
+    for (ind in p1.individuals) //p1.individualcount accesses current size of population
+        ind.setSpatialPosition(p1.pointUniform());
+}
+
+1: late() { //evaluate interactions before fitness callbacks
+    i1.evaluate();
+    i2.evaluate();
+}
+
+fitness(NULL) {
+    totalStrength = i1.totalOfNeighborStrengths(individual);
+    return 10 / (9*(totalStrength/(P * PI * R^2)) + 1);
+}
+
+fitness(NULL) {
+    Acount = individual.countOfMutationsOfType(m2);
+    Bcount = individual.countOfMutationsOfType(m3);
+
+    if ((Acount == 1) & (Bcount == 1))            // heterozygous AB
+        return D;
+    else if ((Acount == 0) & (Bcount == 0))    // homozygous wildtype **
+        return 1.0;
+    else                                                    // *A, *B
+        return 0.0;
+}
+
+1: mateChoice() {
+    return weights*i2.strength(individual);
+}
+
+modifyChild() {
+    r = rexp(1, M);
+    theta = runif(1, 0, 2*PI);
+    pos = parent1.spatialPosition + c(r*sin(theta),r*cos(theta));
+    child.setSpatialPosition(p1.pointPeriodic(pos));
+
+    childGenomes = c(childGenome1, childGenome2);
+    mutACount = sum(childGenomes.countOfMutationsOfType(m2));
+    mutBCount = sum(childGenomes.countOfMutationsOfType(m3));
+
+    if ((mutACount == 1) & (mutBCount == 1))
+         return T;
+       else if ((mutACount == 0) & (mutBCount == 0))
+        return T;
+    else
+        return F;
+}
+
+2: {
+    inds = p1.individuals;
+    inds_with_m2 = (inds.countOfMutationsOfType(m2) == 1);    // logical vector
+    inds_with_m3 = (inds.countOfMutationsOfType(m3) == 1);    // logical vector
+    inds_no_m2 = (inds.countOfMutationsOfType(m2) == 0);
+    inds_no_m3 = (inds.countOfMutationsOfType(m3) == 0);
+    inds_gd = (inds_with_m2 & inds_with_m3);    // logical vector
+    inds_wt = (inds_no_m2 & inds_no_m3);
+    ind_wt_indices = which(inds_wt);    // integer vector of indices
+    ind_gd_indices = which(inds_gd);
+
+    fitness_values_gd = asInteger(round(sum(p1.cachedFitness(ind_gd_indices))/2));
+    fitness_values_wt = asInteger(round(sum(p1.cachedFitness(ind_wt_indices))));
+    fitness_val = fitness_values_gd + fitness_values_wt;
+
+    p1.setSubpopulationSize(fitness_val);
+}
+
+10 {
+    p1.setSubpopulationSize(p1.individualCount + I);
+}
+
+10 late() {
+    drop = sample(p1.individuals, I);
+    // make all drop individuals A/B genotype at position 2
+    cseq = seqAlong(drop);
+    cgenomes1 = drop.genomes[cseq * 2];
+    cgenomes2 = drop.genomes[cseq * 2 + 1];
+    cgenomes1.addNewDrawnMutation(m2, 2);
+    cgenomes2.addNewDrawnMutation(m3, 2);
+
+    for (ind in drop) {
+        r = runif(1, 0, C);
+        theta = runif(1, 0, 2*PI);
+
+        x = r * cos(theta);
+        y = r * sin(theta);
+
+        ind.setSpatialPosition(c(x + 0.5, y + 0.5));
+    }
+    i1.unevaluate();
+    i2.unevaluate();
+    i1.evaluate();
+    i2.evaluate();
+}
+
+10: late() {
+    // Color carriers of the gene drive so we can see them
+    for (ind in p1.individuals)
+        if (ind.countOfMutationsOfType(m2) > 0 & ind.countOfMutationsOfType(m3) > 0)
+            ind.color = "cornflowerblue";
+}
+
+1 {
+    cat("Output key: A-freq, A-freq in radius, A-freq outside, count, gen-number\n");
+}
+
+1:40 late() {
+    all = sim.subpopulations.individuals;
+
+    driveA = sim.mutationsOfType(m2);
+
+    driveA_freq = 0;
+    driveA_in_circle_freq = 0;
+    driveA_outside_circle_freq = 0;
+
+    inside_drive = 0;
+    inside_total = 0;
+    outside_drive = 0;
+    outside_total = 0;
+
+    if (driveA.size()) {
+        driveA_freq = sim.mutationFrequencies(p1, driveA);
+        for (ind in all) {
+            distance_to_center = sqrt((ind.x - 0.5)^2 + (ind.y - 0.5)^2);
+            if (distance_to_center < C) {
+                inside_drive = inside_drive + ind.countOfMutationsOfType(m2);
+                inside_total = inside_total + 2;
+            }
+            else {
+                outside_drive = outside_drive + ind.countOfMutationsOfType(m2);
+                outside_total = outside_total + 2;
+            }
+        }
+    }
+
+    inside_rate = 0.0;
+    if (inside_total)
+        inside_rate = inside_drive / inside_total;
+
+    outside_rate = 0.0;
+    if (outside_total)
+        outside_rate = outside_drive / outside_total;
+
+    cat("#OUTPUT: " + driveA_freq + " " + inside_rate + " " + outside_rate + " ");
+    cat(" " + p1.individualCount + " " + sim.generation + "\n");
+
+    cat("PYTHON:: " + 2 * driveA_freq + " " + 2 * inside_rate + " " + 2 * outside_rate + "\n");
+}
+
+//// END SLIM RUN IF DRIVE DROPS TO ZERO.
+12: late() { // Replace 12 with the generation after drive is dropped.
+    driveA = sim.mutationsOfType(m2); // If something other than m2 is of interest, change this.
+    slim_runs_until_generation = 40; // Change this to the generation when slim run would normally end at.
+    // E.g. the generation that the previous callback runs until.
+    if (!driveA.size()) {
+        for (i in seqLen(slim_runs_until_generation - sim.generation))
+            cat("PYTHON:: 0 0 0\n"); // Basically dummy output, so that averages can be done correctly in python.
+            // Change the above line if more than one thing is being tracked by python.
+        sim.simulationFinished();
+    }
+}
