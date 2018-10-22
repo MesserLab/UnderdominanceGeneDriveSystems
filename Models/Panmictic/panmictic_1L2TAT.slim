@@ -63,11 +63,24 @@ initialize() {
     p2.setSubpopulationSize(asInteger(round(p2_size)));
 }
 
-fitness(NULL)
-{
-    // we have precalculated each individual's fitness according to
-    // its m2 and m3 mutations, and saved the result in tagF
-    return individual.tagF;
+fitness(NULL,p1) {
+    return 10 / (9*(p1.individualCount/P) + 1);
+}
+
+fitness(NULL,p2) {
+    return 10 / (9*(p2.individualCount/P) + 1);
+}
+
+fitness(NULL) {
+    Acount = individual.countOfMutationsOfType(m2);
+    Bcount = individual.countOfMutationsOfType(m3);
+
+    if ((Acount == 1) & (Bcount == 1))            // heterozygous AB
+        return D;
+    else if ((Acount == 0) & (Bcount == 0))    // homozygous wildtype **
+        return 1.0;
+    else                                                    // *A, *B
+        return 0.0;
 }
 
 10 late()
