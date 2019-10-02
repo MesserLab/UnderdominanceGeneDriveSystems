@@ -1,0 +1,123 @@
+
+initialize() {
+    defineConstant("M", 0.01);        // m migration
+    defineConstant("D", 1.0);        // fitness of AB heterozygote
+    // */
+    defineConstant("P", 5000);    // initial population
+
+    initializeMutationType("m1", 0.5, "f", 0.0);
+    initializeMutationType("m2", 0.5, "f", 0.0);        // A
+    initializeMutationType("m3", 0.5, "f", 0.0);        // B
+    m2.convertToSubstitution = F;
+    m3.convertToSubstitution = F;
+
+    initializeGenomicElementType("g1", m1, 1.0);
+    initializeGenomicElement(g1, 0, 2);
+    initializeRecombinationRate(0.5);
+    initializeMutationRate(0);
+}
+
+1 late()
+{
+    // create subpopulations
+    sim.addSubpop("p1", P);
+    sim.addSubpop("p2", P);
+    p1.setMigrationRates(p2, M);
+    p2.setMigrationRates(p1, M);
+
+    // label initial individuals with fitness of 1.0
+    sim.subpopulations.individuals.tagF = 1.0;
+}
+
+2: late()
+{
+    // label every individual with their fitness from m2/m3 mutations
+    // heterozygotes AB are fitness D; wild-type are 1.0; others are 0.0
+    // we put the individual's calculated fitness in individual.tagF
+    for (individual in sim.subpopulations.individuals)
+    {
+        Acount = individual.countOfMutationsOfType(m2);
+        Bcount = individual.countOfMutationsOfType(m3);
+
+        if ((Acount == 1) & (Bcount == 1))            // heterozygous AB
+            individual.tagF = D;
+        else if ((Acount == 0) & (Bcount == 0))    // homozygous wildtype **
+            individual.tagF = 1.0;
+        else                                                    // *A, *B
+            individual.tagF = 0.0;
+    }
+
+    // calculate and set the population sizes based upon the number
+    // of individuals of non-zero fitness;
+    p1_effective = sum(asInteger(p1.individuals.tagF > 0.0));
+    p2_effective = sum(asInteger(p2.individuals.tagF > 0.0));
+
+    p1_size = (10 / (9 * (p1_effective / P) + 1)) * p1_effective;
+    p2_size = (10 / (9 * (p2_effective / P) + 1)) * p2_effective;
+
+    p1.setSubpopulationSize(asInteger(round(p1_size)));
+    p2.setSubpopulationSize(asInteger(round(p2_size)));
+}
+
+fitness(NULL,p1) {
+    return 10 / (9*(p1.individualCount/P) + 1);
+}
+
+fitness(NULL,p2) {
+    return 10 / (9*(p2.individualCount/P) + 1);
+}
+
+fitness(NULL) {
+    Acount = individual.countOfMutationsOfType(m2);
+    Bcount = individual.countOfMutationsOfType(m3);
+
+    if ((Acount == 1) & (Bcount == 1))            // heterozygous AB
+        return D;
+    else if ((Acount == 0) & (Bcount == 0))    // homozygous wildtype **
+        return 1.0;
+    else                                                    // *A, *B
+        return 0.0;
+}
+
+10 late()
+{
+    // drop mutants in p1 in generation 10
+    drop = p1.individuals;
+    cseq = seqAlong(drop);
+
+    cgenomes1 = drop.genomes[cseq * 2];
+    cgenomes2 = drop.genomes[cseq * 2 + 1];
+    cgenomes1.addNewDrawnMutation(m2, 2);
+    cgenomes2.addNewDrawnMutation(m3, 2);
+}
+
+modifyChild()
+{
+    // suppress A* and B* offspring (but allow AA and BB)
+    mutACount = child.countOfMutationsOfType(m2);
+    mutBCount = child.countOfMutationsOfType(m3);
+
+    if ((mutACount == 1) & (mutBCount == 0))
+        return F;
+    else if ((mutACount == 0) & (mutBCount == 1))
+        return F;
+    else
+        return T;
+}
+
+1:110 late() {
+    driveA = sim.mutationsOfType(m2);
+
+    p1_freq = 0;
+    p2_freq = 0;
+    if (driveA.size()) {
+        p1_freq = sim.mutationFrequencies(p1, driveA);
+        p2_freq = sim.mutationFrequencies(p2, driveA);
+    }
+    combined_freq = (p1_freq * p1.individualCount + p2_freq * p2.individualCount)/(p1.individualCount + p2.individualCount);
+
+    cat("#OUTPUT: ");
+    cat(" " + p1.individualCount + " " + sim.generation + "\n");
+    cat("p1,p2,combined: " + p1_freq + " " + p2_freq + " " + combined_freq + "\n");
+    cat("PYTHON:: " + 2 * combined_freq + " " + 2 * p1_freq + " " + 2 * p2_freq + "\n");}
+
